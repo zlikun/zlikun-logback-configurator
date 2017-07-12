@@ -1,5 +1,6 @@
 package com.zlikun.logback;
 
+import ch.qos.logback.classic.AsyncAppender;
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.LoggerContext;
@@ -13,8 +14,6 @@ import ch.qos.logback.core.FileAppender;
 import ch.qos.logback.core.encoder.Encoder;
 import ch.qos.logback.core.encoder.LayoutWrappingEncoder;
 import ch.qos.logback.core.rolling.RollingFileAppender;
-import ch.qos.logback.core.rolling.RollingPolicy;
-import ch.qos.logback.core.rolling.TimeBasedFileNamingAndTriggeringPolicy;
 import ch.qos.logback.core.rolling.TimeBasedRollingPolicy;
 import ch.qos.logback.core.spi.ContextAwareBase;
 import ch.qos.logback.core.util.FileSize;
@@ -35,19 +34,57 @@ public class LogbackConfigurator extends ContextAwareBase implements Configurato
         // 自定义Encoder
         PatternLayoutEncoder encoder = new PatternLayoutEncoder();
         // https://logback.qos.ch/manual/layouts.html#ClassicPatternLayout
-        encoder.setPattern("%date{yyyy/MM/dd HH:mm:ss.SSS} %5level [%thread] %20.20logger - %message%n");
+        encoder.setPattern("%date{yyyy/MM/dd HH:mm:ss.SSS} %-5level %-18thread %20.20logger - %message%n");
         ConsoleAppender<ILoggingEvent> consoleAppender = consoleAppender(encoder) ;
 
         // 文件Appender
-        // FileAppender<ILoggingEvent> fileAppender = fileAppender(encoder) ;
+        FileAppender<ILoggingEvent> fileAppender = fileAppender(encoder) ;
         // 滚动文件Appender
-        FileAppender<ILoggingEvent> fileAppender = rollingFileAppender(encoder) ;
+        // FileAppender<ILoggingEvent> fileAppender = rollingFileAppender(encoder) ;
+
+        // 异步Appender
+        AsyncAppender asyncAppender = asyncAppender(consoleAppender) ;
 
         // 设置ROOT输出配置[CONSOLE ,DEBUG ,false]
         setAppender(context.getLogger(Logger.ROOT_LOGGER_NAME), consoleAppender, Level.INFO, false);
         // additive 设置为 true ，表示日志向上传递，使用其上级配置输出，如果指定了不同类的Appender，则输出多次
         setAppender(context.getLogger("com.zlikun.user"), fileAppender, Level.DEBUG, true);
+        // 使用异步Appender，测试其特性
+        setAppender(context.getLogger("com.zlikun.async"), asyncAppender, Level.DEBUG, false);
 
+    }
+
+    /**
+     * 异步Appender，异步Appender本身并无输出日志能力，需要指定一个或多个实际输出日志的Appender
+     * @param appender
+     * @return
+     */
+    AsyncAppender asyncAppender(Appender appender) {
+        if (appender == null) throw new IllegalArgumentException("appender is required .") ;
+        AsyncAppender asyncAppender = new AsyncAppender() ;
+        asyncAppender.setContext(context);
+        asyncAppender.setName("async");
+
+        // 设置异步属性
+        // https://logback.qos.ch/manual/appenders.html#AsyncAppender
+        // 设置队列大小，默认256。本例设置为8以便于测试
+        asyncAppender.setQueueSize(8);
+        // 设置永不阻塞，默认false，即：当队列满时，将产生阻塞。设置为true，当消息充满队列时，将删除消息，不会阻塞应用
+        // 这里的删除消息区别于discardingThreshold导致的丢弃消息，neverBlock为true时，当队列满时，
+        // 将不再接收消息(丢弃)，无论日志是什么级别的，所以可能出现WARN和ERROR级别消息也被丢弃的情况
+        asyncAppender.setNeverBlock(false);
+        // 设置丢弃阈值，默认：queueSize / 5，表示当队列填充数据超过80%时，将发生丢弃操作，从低级别日志向高级别丢弃，级别为WARN和ERROR的日志将永不被丢弃。
+        // -1 表示未定义，执行#start()方法时，将重新赋值：discardingThreshold = queueSize / 5;
+        // 本例取1/4，即8 / 4 == 2，当日志填充队列，堆积超过6时，将发生丢弃
+        asyncAppender.setDiscardingThreshold(2);
+        // 当前LoggerContext停止时，指定一个毫秒数(默认：1000)，用于处理队列中仍存在的日志信息，当超过这个时间后，队列中的日志将丢失
+        asyncAppender.setMaxFlushTime(1000);
+
+        // 添加代理Appender
+        asyncAppender.addAppender(appender);
+        asyncAppender.start();
+
+        return asyncAppender ;
     }
 
     /**
