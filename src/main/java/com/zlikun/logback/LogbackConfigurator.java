@@ -1,22 +1,19 @@
 package com.zlikun.logback;
 
-import ch.qos.logback.classic.AsyncAppender;
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.encoder.PatternLayoutEncoder;
-import ch.qos.logback.classic.layout.TTLLLayout;
 import ch.qos.logback.classic.spi.Configurator;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.Appender;
 import ch.qos.logback.core.ConsoleAppender;
-import ch.qos.logback.core.FileAppender;
 import ch.qos.logback.core.encoder.Encoder;
-import ch.qos.logback.core.encoder.LayoutWrappingEncoder;
-import ch.qos.logback.core.rolling.RollingFileAppender;
-import ch.qos.logback.core.rolling.TimeBasedRollingPolicy;
 import ch.qos.logback.core.spi.ContextAwareBase;
-import ch.qos.logback.core.util.FileSize;
+import net.logstash.logback.encoder.LogstashEncoder;
+import net.logstash.logback.stacktrace.ShortenedThrowableConverter;
+
+import java.util.Arrays;
 
 /**
  * @auther zlikun <zlikun-dev@hotmail.com>
@@ -26,141 +23,93 @@ public class LogbackConfigurator extends ContextAwareBase implements Configurato
 
     @Override
     public void configure(LoggerContext context) {
-        addInfo("日志组件正使用默认配置 .");
 
-//        // 使用默认配置
-//        ConsoleAppender<ILoggingEvent> consoleAppender = defaultConsoleAppender() ;
+        // 模板布局Encoder
+        // PatternLayoutEncoder encoder = patternLayoutEncoder("%date{yyyy/MM/dd HH:mm:ss.SSS} %-5level %-18thread %20.20logger - %message%n") ;
 
-        // 自定义Encoder
-        PatternLayoutEncoder encoder = new PatternLayoutEncoder();
-        // https://logback.qos.ch/manual/layouts.html#ClassicPatternLayout
-        encoder.setPattern("%date{yyyy/MM/dd HH:mm:ss.SSS} %-5level %-18thread %20.20logger - %message%n");
+        // LogstashEncoder
+        LogstashEncoder encoder = logstashEncoder() ;
+
+        // 控制台Appender
         ConsoleAppender<ILoggingEvent> consoleAppender = consoleAppender(encoder) ;
-
-        // 文件Appender
-        FileAppender<ILoggingEvent> fileAppender = fileAppender(encoder) ;
-        // 滚动文件Appender
-        // FileAppender<ILoggingEvent> fileAppender = rollingFileAppender(encoder) ;
-
-        // 异步Appender
-        AsyncAppender asyncAppender = asyncAppender(consoleAppender) ;
 
         // 设置ROOT输出配置[CONSOLE ,DEBUG ,false]
         setAppender(context.getLogger(Logger.ROOT_LOGGER_NAME), consoleAppender, Level.INFO, false);
-        // additive 设置为 true ，表示日志向上传递，使用其上级配置输出，如果指定了不同类的Appender，则输出多次
-        setAppender(context.getLogger("com.zlikun.user"), fileAppender, Level.DEBUG, true);
-        // 使用异步Appender，测试其特性
-        setAppender(context.getLogger("com.zlikun.async"), asyncAppender, Level.DEBUG, false);
+        setAppender(context.getLogger("com.zlikun.logback"), Level.DEBUG, true);
 
     }
 
     /**
-     * 异步Appender，异步Appender本身并无输出日志能力，需要指定一个或多个实际输出日志的Appender
-     * @param appender
+     * LogstashEncoder
      * @return
      */
-    AsyncAppender asyncAppender(Appender appender) {
-        if (appender == null) throw new IllegalArgumentException("appender is required .") ;
-        AsyncAppender asyncAppender = new AsyncAppender() ;
-        asyncAppender.setContext(context);
-        asyncAppender.setName("async");
+    LogstashEncoder logstashEncoder() {
+        LogstashEncoder encoder = new LogstashEncoder() ;
+        encoder.setContext(context);
+        encoder.setEncoding("UTF-8");
 
-        // 设置异步属性
-        // https://logback.qos.ch/manual/appenders.html#AsyncAppender
-        // 设置队列大小，默认256。本例设置为8以便于测试
-        asyncAppender.setQueueSize(8);
-        // 设置永不阻塞，默认false，即：当队列满时，将产生阻塞。设置为true，当消息充满队列时，将删除消息，不会阻塞应用
-        // 这里的删除消息区别于discardingThreshold导致的丢弃消息，neverBlock为true时，当队列满时，
-        // 将不再接收消息(丢弃)，无论日志是什么级别的，所以可能出现WARN和ERROR级别消息也被丢弃的情况
-        asyncAppender.setNeverBlock(false);
-        // 设置丢弃阈值，默认：queueSize / 5，表示当队列填充数据超过80%时，将发生丢弃操作，从低级别日志向高级别丢弃，级别为WARN和ERROR的日志将永不被丢弃。
-        // -1 表示未定义，执行#start()方法时，将重新赋值：discardingThreshold = queueSize / 5;
-        // 本例取1/4，即8 / 4 == 2，当日志填充队列，堆积超过6时，将发生丢弃
-        asyncAppender.setDiscardingThreshold(2);
-        // 当前LoggerContext停止时，指定一个毫秒数(默认：1000)，用于处理队列中仍存在的日志信息，当超过这个时间后，队列中的日志将丢失
-        asyncAppender.setMaxFlushTime(1000);
+        // 设置属性
+        // 设置自定义字段(全局)
+        encoder.setCustomFields("{\"_project\":\"zlikun-logback-configurator\" ,\"_author\":\"zlikun\"}");
+        // 设置包含MDC信息(以JSON形式)
+        encoder.setIncludeMdc(true);
+        // 设置包含Caller信息，该设置比较影响性能，慎用
+        // 包含：caller_class_name、caller_method_name、caller_file_name、caller_line_number 几个字段
+        // {"caller_class_name":"com.zlikun.logback.LoggerTest","caller_method_name":"test","caller_file_name":"LoggerTest.java","caller_line_number":20}
+        encoder.setIncludeCallerData(false);
+        // 设置包含Context信息，效果参考测试用例注释部分
+        encoder.setIncludeContext(false);
+        // 设置排除的MDC字段信息
+        // encoder.setExcludeMdcKeyNames(Arrays.asList("username"));
+        // 添加排除的MDC字段信息，区别于#setExcludeMdcKeyNames()
+        encoder.addExcludeMdcKeyName("username");
+        // 与添加相反，类似于白名单、黑名单的区别，两者不能同时设置(二选一)
+        // encoder.addIncludeMdcKeyName("userId");
+        // 设置使用缩短的Logger名称，设定其触发缩短的长度
+        encoder.setShortenedLoggerNameLength(20);
+        // 设置时区，"GMT+08:00"表示东八区(由当前语言环境决定默认值，一般不用设定)，"GMT+00:00" / "GMT"表示格林威治时间
+        // "@timestamp":"2017-07-12T13:59:35.144+08:00" 时间戳由日期、时间、时区构成
+        // encoder.setTimeZone("GMT+08:00");
+        // 设置@version值，取值为任意整数
+        encoder.setVersion(1);
+        // 设置字段名(修改)
+        // LogstashFieldNames lfn = new LogstashFieldNames() ;
+        // lfn.setTimestamp("_timestamp");
+        // encoder.setFieldNames(lfn);
+        // 设置异常转换器
+        ShortenedThrowableConverter converter = new ShortenedThrowableConverter() ;
+        converter.setContext(context);
+        // 指定异常层数
+        // converter.setMaxDepthPerThrowable(15);
+        // 使用短类名，指定触发长度
+        // converter.setShortenedClassNameLength(30);
+        // 指定异常信息最大长度，超过部分将被截取
+        converter.setMaxLength(2048);
+        converter.setRootCauseFirst(true);
+        // 设置排除条件，使用正则表达式
+        converter.setExcludes(Arrays.asList("^sun.reflect.*" ,"^java\\.lang\\.reflect.*" ,"^org\\.junit.*" ,"^com.intellij.*"));
+        encoder.setThrowableConverter(converter);
 
-        // 添加代理Appender
-        asyncAppender.addAppender(appender);
-        asyncAppender.start();
-
-        return asyncAppender ;
-    }
-
-    /**
-     * 滚动文件Appender，自定义Encoder
-     * @param encoder
-     * @return
-     */
-    FileAppender<ILoggingEvent> rollingFileAppender(Encoder encoder) {
-        if (encoder == null) throw new IllegalArgumentException("encoder is required .") ;
-        RollingFileAppender<ILoggingEvent> appender = new RollingFileAppender<ILoggingEvent>();
-        appender.setContext(this.context);
-        appender.setName("file");
-
-        // 设置输出日志文件
-        appender.setAppend(true);
-        appender.setBufferSize(FileSize.valueOf("4kb"));
-        appender.setFile("./target/log/server.log");
-        appender.setPrudent(false);
-        appender.setImmediateFlush(true);
-
-        // 设置滚动策略
-        TimeBasedRollingPolicy policy = new TimeBasedRollingPolicy() ;
-        // 设置上下文
-        policy.setContext(this.context);
-        // 设置启动时清理历史
-        policy.setCleanHistoryOnStart(false);
-        // 设置最大历史文件5个
-        policy.setMaxHistory(5);
-        // 设置文件名称模板，这里用于测试，以秒滚动
-        policy.setFileNamePattern("./target/log/server.%d{HHmmss}.zip");
-        // 设置总文件容量，默认：0，表示不限制
-        policy.setTotalSizeCap(FileSize.valueOf("16kb"));
-        // parent and context required
-        // https://github.com/tony19/logback-android/wiki/Appender-Notes#configuration-in-code
-        policy.setParent(appender);
-        // 启动滚动策略
-        policy.start();
-        appender.setRollingPolicy(policy);
-
-        encoder.setContext(this.context);
-        if (!encoder.isStarted()) encoder.start();
-        appender.setEncoder(encoder);
-
-        appender.start();
-        return appender ;
-    }
-
-    /**
-     * 文件Appender，自定义Encoder
-     * @param encoder
-     * @return
-     */
-    FileAppender<ILoggingEvent> fileAppender(Encoder encoder) {
-        if (encoder == null) throw new IllegalArgumentException("encoder is required .") ;
-        FileAppender<ILoggingEvent> appender = new FileAppender<ILoggingEvent>() ;
-        // 设置context要在设置文件相关属性之前
-        appender.setContext(this.context);
-        appender.setName("file");
-
-        // 设置以追加方式记录日志
-        appender.setAppend(true);
-        // 设置文件缓存区，可选单位：[kb/mb/gb]，默认：8192 (字节，即：8kb)
-        // appender.setBufferSize(FileSize.valueOf("8192"));
-        appender.setBufferSize(FileSize.valueOf("4kb"));
-        // 设置输出文件路径
-        appender.setFile("./target/log/server.log");
-        // 设置多个JVM日志输出可以安全输出到同一日志文件
-        appender.setPrudent(false);
         // 设置立即刷新
-        appender.setImmediateFlush(true);
+        encoder.setImmediateFlush(true);
+        // 设置最小缓冲区大小，单位：字节，默认：1024
+        encoder.setMinBufferSize(64);
+        // encoder.setJsonFactoryDecorator();
+        // encoder.setJsonGeneratorDecorator();
 
-        encoder.setContext(this.context);
-        if (!encoder.isStarted()) encoder.start();
-        appender.setEncoder(encoder);
-        appender.start();
-        return appender ;
+        // encoder.start();
+        return encoder ;
+    }
+
+    /**
+     * 模板布局Encoder
+     * @param pattern
+     * @return
+     */
+    PatternLayoutEncoder patternLayoutEncoder(String pattern) {
+        PatternLayoutEncoder encoder = new PatternLayoutEncoder();
+        encoder.setPattern(pattern);
+        return encoder ;
     }
 
     /**
@@ -180,35 +129,6 @@ public class LogbackConfigurator extends ContextAwareBase implements Configurato
         encoder.setContext(this.context);
         // encoder要在appender启动之前启动，否则不会输出日志
         if (!encoder.isStarted()) encoder.start();
-        // 设置Encoder
-        appender.setEncoder(encoder);
-        // 启动Appender
-        appender.start();
-        // 返回实例
-        return appender;
-    }
-
-    /**
-     * 默认控制台Appender
-     * @see ch.qos.logback.classic.BasicConfigurator
-     * @return
-     */
-    ConsoleAppender<ILoggingEvent> defaultConsoleAppender() {
-        // 构造Appender实例
-        ConsoleAppender<ILoggingEvent> appender = new ConsoleAppender<ILoggingEvent>();
-        // 设置上下文
-        appender.setContext(this.context);
-        // 设置名称
-        appender.setName("console");
-        // 设置布局Encoder
-        LayoutWrappingEncoder<ILoggingEvent> encoder = new LayoutWrappingEncoder<ILoggingEvent>();
-        encoder.setContext(this.context);
-        // 设置布局
-        TTLLLayout layout = new TTLLLayout();
-        // 设置上下文
-        layout.setContext(this.context);
-        layout.start();
-        encoder.setLayout(layout);
         // 设置Encoder
         appender.setEncoder(encoder);
         // 启动Appender

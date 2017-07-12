@@ -8,3 +8,6 @@
 META-INF/services/ch.qos.logback.classic.spi.Configurator
 ```
 
+#### [Logstash](https://github.com/logstash/logstash-logback-encoder)
+- <https://github.com/logstash/logstash-logback-encoder#async-appenders>
+- 
